@@ -5,7 +5,6 @@ on:
     - cron: '0 10 * * *'  # Jam 10:00 UTC = Jam 17:00 WIB
   workflow_dispatch:      # Tombol manual eksekusi
 
-# WAJIB: Memberi izin runner untuk push pembaruan file ke repo
 permissions:
   contents: write
 
@@ -41,5 +40,9 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add seen_news.json
-          git diff --staged --quiet || (git commit -m "chore: persist seen_news state [skip ci]" && git push)
+          if [ -f seen_news.json ]; then
+            git add seen_news.json
+            git diff --staged --quiet || (git commit -m "chore: persist seen_news state [skip ci]" && git push)
+          else
+            echo "ℹ️ File seen_news.json belum ada di runner, skip commit."
+          fi
