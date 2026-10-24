@@ -75,7 +75,7 @@ def search_tavily(query: str, seen_urls: set, domains: list = None, topic: str =
         "query": query,
         "topic": topic,
         "days": 3,
-        "max_results": 6,
+        "max_results": 7,
         "search_depth": "advanced",
     }
     if domains:
@@ -100,7 +100,7 @@ def search_tavily(query: str, seen_urls: set, domains: list = None, topic: str =
                     "snippet": r.get("content", "")[:350],
                 })
 
-            return valid_articles[:2]
+            return valid_articles[:3]
         else:
             print(f"❌ Tavily Error status code: {response.status_code}")
             return []
@@ -110,10 +110,9 @@ def search_tavily(query: str, seen_urls: set, domains: list = None, topic: str =
 
 
 def generate_summary_with_fallback(client, prompt, retries_per_model=3, initial_delay=5):
-    """Memanggil Gemini API secara dinamis dengan seluruh fallback model aktif di akun."""
+    """Memanggil Gemini API secara dinamis dengan fallback model aktif di akun."""
     candidate_models = []
 
-    # 1. Deteksi dinamis model aktif dari API key kamu
     try:
         active_models = [m.name.replace("models/", "") for m in client.models.list()]
         preferred = [
@@ -131,7 +130,7 @@ def generate_summary_with_fallback(client, prompt, retries_per_model=3, initial_
             if "gemini" in m and "embedding" not in m and m not in candidate_models:
                 candidate_models.append(m)
     except Exception as e:
-        print(f"⚠️ Gagal membaca model dinamis: {e}. Menggunakan daftar fallback default.")
+        print(f"⚠️ Gagal membaca model dinamis: {e}. Menggunakan fallback default.")
 
     if not candidate_models:
         candidate_models = [
@@ -160,7 +159,6 @@ def generate_summary_with_fallback(client, prompt, retries_per_model=3, initial_
                 err_msg = str(e)
                 print(f"⚠️ [{model_name}] Percobaan {attempt}/{retries_per_model} Gagal: {err_msg[:120]}")
 
-                # Langsung lewati model jika tidak didukung akun / 404
                 if any(k in err_msg.lower() for k in ["not found", "404", "deprecated", "limit: 0", "unsupported"]):
                     print(f"⏩ Model {model_name} tidak didukung akun ini. Lewati...")
                     break
@@ -172,7 +170,7 @@ def generate_summary_with_fallback(client, prompt, retries_per_model=3, initial_
 
 
 def get_news_digest(seen_urls: set):
-    """Mengambil intel teknis dan radar hackathon/bounty."""
+    """Mengambil intel teknis dan radar hackathon/bounty aktif."""
     today_str = datetime.now().strftime("%B %Y")
 
     search_configs = {
@@ -187,7 +185,13 @@ def get_news_digest(seen_urls: set):
             "topic": "news",
         },
         "HACKATHONS_BOUNTIES": {
-            "query": '("AI hackathon" OR "cloud challenge" OR "bounty" OR "developer grant") ("prize pool" OR "cash prize" OR "reward") ("online" OR "global")',
+            # Memfilter kata kunci 'finished' dan 'ended' agar tidak mengambil kompetisi kadaluwarsa
+            "query": (
+                '("AI hackathon" OR "cloud challenge" OR "bounty" OR "developer grant") '
+                '("prize pool" OR "cash prize" OR "reward") '
+                '("register" OR "registration open" OR "LIVE" OR "upcoming") '
+                '-finished -ended'
+            ),
             "domains": [
                 "devpost.com",
                 "dorahacks.io",
@@ -231,11 +235,13 @@ Instructions:
    - Bold Title
    - 1-2 sentence core engineering takeaway (root cause, vulnerability, or infra enhancement).
    - Direct valid URL.
-3. For Hackathon / Bounty items:
+3. For Hackathon / Bounty items (STRICT FILTERING):
+   - ONLY include hackathons/bounties that are CURRENTLY ACTIVE, LIVE, or UPCOMING.
+   - If the snippet states that the hackathon is "Finished", "Ended", "Concluded", or its submission window has already passed, DISCARD IT ENTIRELY.
    - Bold Competition / Bounty Name
-   - Mention Prize Pool / Reward if mentioned in data, deadline/status, and technical focus (AI Agents, Cloud Native, Go, Python, etc.)
+   - Mention Prize Pool / Reward if stated, current status or deadline, and technical focus (AI Agents, Cloud Native, Go, Python, etc.)
    - Direct application / registration URL.
-4. If either section is empty, output "Belum ada update baru hari ini." for that section.
+4. If either section is empty (or all candidates were discarded), output "Belum ada update baru hari ini." for that section.
 
 Format Template:
 📰 **TECH & OPPORTUNITY DIGEST** 📰
@@ -304,7 +310,7 @@ if __name__ == "__main__":
             sys.exit(0)
         except Exception as e:
             print(f"❌ Terjadi error: {e}")
-            sys.exit(1)  # Menghentikan runner agar git push tidak dijalankan saat terjadi kegagalan
+            sys.exit(1)
     else:
         print("🤖 Bot interaktif aktif (Mode Polling)...")
         if bot:
