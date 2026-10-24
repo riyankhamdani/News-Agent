@@ -5,6 +5,10 @@ on:
     - cron: '0 10 * * *'  # Jam 10:00 UTC = Jam 17:00 WIB
   workflow_dispatch:      # Tombol manual eksekusi
 
+# WAJIB: Memberi izin runner untuk push pembaruan file ke repo
+permissions:
+  contents: write
+
 jobs:
   run-bot:
     runs-on: ubuntu-latest
@@ -15,7 +19,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'  # Upgrade dari 3.10 ke 3.11 untuk menghilangkan warning EOL
+          python-version: '3.11'
 
       - name: Install Dependencies
         run: |
@@ -31,3 +35,11 @@ jobs:
           RUN_MODE: cron
         run: |
           python agent.py
+
+      - name: Commit and Push seen_news.json
+        if: success()
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_news.json
+          git diff --staged --quiet || (git commit -m "chore: persist seen_news state [skip ci]" && git push)
