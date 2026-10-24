@@ -36,14 +36,22 @@ def normalize_url(raw_url: str) -> str:
 
 
 def load_seen_news() -> set:
-    """Membaca riwayat URL yang sudah pernah dikirim."""
-    if os.path.exists(SEEN_NEWS_FILE):
+    """Membaca riwayat URL berita. Menginisialisasi file jika belum ada."""
+    if not os.path.exists(SEEN_NEWS_FILE):
         try:
-            with open(SEEN_NEWS_FILE, "r") as f:
-                return set(json.load(f))
+            with open(SEEN_NEWS_FILE, "w") as f:
+                json.dump([], f)
+            print(f"📄 File {SEEN_NEWS_FILE} berhasil diinisialisasi otomatis.")
         except Exception as e:
-            print(f"⚠️ Gagal membaca {SEEN_NEWS_FILE}: {e}")
-    return set()
+            print(f"⚠️ Gagal inisialisasi awal {SEEN_NEWS_FILE}: {e}")
+        return set()
+
+    try:
+        with open(SEEN_NEWS_FILE, "r") as f:
+            return set(json.load(f))
+    except Exception as e:
+        print(f"⚠️ Gagal membaca {SEEN_NEWS_FILE}: {e}")
+        return set()
 
 
 def save_seen_news(seen_news: set):
@@ -82,7 +90,6 @@ def search_tavily(query: str, seen_urls: set, domains: list = None, topic: str =
                 raw_link = r.get("url", "")
                 clean_link = normalize_url(raw_link)
 
-                # Lewati jika sudah pernah dikirim
                 if clean_link in seen_urls or raw_link in seen_urls:
                     continue
 
@@ -103,18 +110,36 @@ def search_tavily(query: str, seen_urls: set, domains: list = None, topic: str =
 
 
 def generate_summary_with_fallback(client, prompt, retries_per_model=3, initial_delay=5):
-    """Memanggil Gemini API secara dinamis dengan fallback model aktif."""
+    """Memanggil Gemini API secara dinamis dengan seluruh fallback model aktif di akun."""
     candidate_models = []
+
+    # 1. Deteksi dinamis model aktif dari API key kamu
     try:
         active_models = [m.name.replace("models/", "") for m in client.models.list()]
-        for pref in ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]:
+        preferred = [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-pro",
+            "gemini-1.5-pro",
+        ]
+        for pref in preferred:
             if pref in active_models:
                 candidate_models.append(pref)
-    except Exception:
-        candidate_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+        for m in active_models:
+            if "gemini" in m and "embedding" not in m and m not in candidate_models:
+                candidate_models.append(m)
+    except Exception as e:
+        print(f"⚠️ Gagal membaca model dinamis: {e}. Menggunakan daftar fallback default.")
 
     if not candidate_models:
-        candidate_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
+        candidate_models = [
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-2.5-pro",
+        ]
 
     config = types.GenerateContentConfig(
         temperature=0.2,
@@ -129,45 +154,57 @@ def generate_summary_with_fallback(client, prompt, retries_per_model=3, initial_
                     model=model_name, contents=prompt, config=config
                 )
                 if response.text:
+                    print(f"✅ Sukses generate summary menggunakan model: {model_name}")
                     return response.text
-            except (APIError, Exception) as e:
+            except Exception as e:
                 err_msg = str(e)
-                if any(k in err_msg.lower() for k in ["not found", "404", "deprecated", "limit: 0"]):
+                print(f"⚠️ [{model_name}] Percobaan {attempt}/{retries_per_model} Gagal: {err_msg[:120]}")
+
+                # Langsung lewati model jika tidak didukung akun / 404
+                if any(k in err_msg.lower() for k in ["not found", "404", "deprecated", "limit: 0", "unsupported"]):
+                    print(f"⏩ Model {model_name} tidak didukung akun ini. Lewati...")
                     break
+
                 delay = (initial_delay * attempt) + random.uniform(1.0, 3.0)
-                print(f"⚠️ [{model_name}] Retry {attempt}/{retries_per_model}: {err_msg[:60]}... Tunggu {delay:.1f}s")
                 time.sleep(delay)
 
-    raise Exception("Gagal mendapatkan respons dari semua model Gemini.")
+    raise Exception("Gagal mendapatkan respons dari seluruh kandidat model Gemini.")
 
 
 def get_news_digest(seen_urls: set):
     """Mengambil intel teknis dan radar hackathon/bounty."""
     today_str = datetime.now().strftime("%B %Y")
 
-    # Kategori 1 & 2: Berita Teknis & Arsitektur
-    # Kategori 3: Hackathon & Bounties
     search_configs = {
         "OUTAGES": {
             "query": f'("post-mortem" OR "outage analysis" OR "incident retrospective") ("Kubernetes" OR "AWS" OR "Cloudflare" OR "cloud") {today_str}',
             "domains": None,
-            "topic": "news"
+            "topic": "news",
         },
         "CLOUD_AI_INFRA": {
             "query": f'("Kubernetes security" OR "CVE" OR "vLLM" OR "AI infrastructure" OR "GPU cluster") ("release" OR "architecture") {today_str}',
             "domains": None,
-            "topic": "news"
+            "topic": "news",
         },
         "HACKATHONS_BOUNTIES": {
             "query": '("AI hackathon" OR "cloud challenge" OR "bounty" OR "developer grant") ("prize pool" OR "cash prize" OR "reward") ("online" OR "global")',
-            "domains": ["devpost.com", "dorahacks.io", "lablab.ai", "algora.io", "polar.sh", "taikai.network"],
-            "topic": "general"
-        }
+            "domains": [
+                "devpost.com",
+                "dorahacks.io",
+                "lablab.ai",
+                "algora.io",
+                "polar.sh",
+                "taikai.network",
+            ],
+            "topic": "general",
+        },
     }
 
     digest_data = {}
     for cat, cfg in search_configs.items():
-        digest_data[cat] = search_tavily(cfg["query"], seen_urls, domains=cfg["domains"], topic=cfg["topic"])
+        digest_data[cat] = search_tavily(
+            cfg["query"], seen_urls, domains=cfg["domains"], topic=cfg["topic"]
+        )
 
     total_items = sum(len(items) for items in digest_data.values())
     if total_items == 0:
@@ -266,8 +303,8 @@ if __name__ == "__main__":
                 print("ℹ️ Tidak ada pesan terkirim (tidak ada entri baru).")
             sys.exit(0)
         except Exception as e:
-            print(f"⚠️ Terjadi error: {e}")
-            sys.exit(0)
+            print(f"❌ Terjadi error: {e}")
+            sys.exit(1)  # Menghentikan runner agar git push tidak dijalankan saat terjadi kegagalan
     else:
         print("🤖 Bot interaktif aktif (Mode Polling)...")
         if bot:
